@@ -705,6 +705,7 @@ class AsyncoreWebSocketServer(asyncore.dispatcher):
       self.host = host
       self.port = port
       self.handler = websockethandler
+      self.clients = []
       self.create_socket (socket.AF_INET, socket.SOCK_STREAM)
       self.set_reuse_addr()
       self.bind((host, port))
@@ -721,7 +722,14 @@ class AsyncoreWebSocketServer(asyncore.dispatcher):
          return
       # creates an instance of the handler class to handle the request/response
       # on the incoming connexion
-      self.handler(self, conn, addr)
+      c = self.handler(self, conn, addr)
+      self.clients.append(c)
+      print("new client", self.clients)
+
+   def broadcast(self, msg):
+      for c in self.clients:
+         if c.handshaked and not c.closed:
+            c.sendMessage(msg)
 
 
 class AsyncoreWebSocketServerHandler(WebSocket, asyncore.dispatcher):
@@ -733,15 +741,43 @@ class AsyncoreWebSocketServerHandler(WebSocket, asyncore.dispatcher):
    def handle_read(self):
       try:
          self._handleData()
-         while self.sendq:
-            opcode, payload = self.sendq.popleft()
-            remaining = self._sendBuffer(payload)
-            if remaining is not None:
-                self.sendq.appendleft((opcode, remaining))
-                break
-            else:
-                if opcode == CLOSE:
-                   raise Exception('received client close')
       except Exception as n:
          asyncore.dispatcher.close(self)
          self.handleClose()
+
+   def handleClose(self):
+      self.server.clients.remove(self)
+
+   def _sendMessage(self, fin, opcode, data):
+        payload = bytearray()
+
+        b1 = 0
+        b2 = 0
+        if fin is False:
+           b1 |= 0x80
+        b1 |= opcode
+
+        if _check_unicode(data):
+           data = data.encode('utf-8')
+
+        length = len(data)
+        payload.append(b1)
+
+        if length <= 125:
+           b2 |= length
+           payload.append(b2)
+
+        elif length >= 126 and length <= 65535:
+           b2 |= 126
+           payload.append(b2)
+           payload.extend(struct.pack("!H", length))
+
+        else:
+           b2 |= 127
+           payload.append(b2)
+           payload.extend(struct.pack("!Q", length))
+
+        if length > 0:
+           payload.extend(data)
+
+        self.send(payload)
