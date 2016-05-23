@@ -741,6 +741,15 @@ class AsyncoreWebSocketServerHandler(WebSocket, asyncore.dispatcher):
    def handle_read(self):
       try:
          self._handleData()
+         while self.sendq:
+            opcode, payload = self.sendq.popleft()
+            remaining = self._sendBuffer(payload)
+            if remaining is not None:
+                self.sendq.appendleft((opcode, remaining))
+                break
+            else:
+                if opcode == CLOSE:
+                   raise Exception('received client close')
       except Exception as n:
          asyncore.dispatcher.close(self)
          self.handleClose()
